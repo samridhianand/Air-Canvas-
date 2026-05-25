@@ -1,159 +1,159 @@
-import numpy as np
 import cv2
+import numpy as np
+import mediapipe as mp
 from collections import deque
+import time
+import math
 
-#default called trackbar function 
-def setValues(x):
-   print("")
-
-
-# Creating the trackbars needed for adjusting the marker colour
-cv2.namedWindow("Color detectors")
-cv2.createTrackbar("Upper Hue", "Color detectors", 153, 180,setValues)
-cv2.createTrackbar("Upper Saturation", "Color detectors", 255, 255,setValues)
-cv2.createTrackbar("Upper Value", "Color detectors", 255, 255,setValues)
-cv2.createTrackbar("Lower Hue", "Color detectors", 64, 180,setValues)
-cv2.createTrackbar("Lower Saturation", "Color detectors", 72, 255,setValues)
-cv2.createTrackbar("Lower Value", "Color detectors", 49, 255,setValues)
-
-
-# Giving different arrays to handle colour points of different colour
-bpoints = [deque(maxlen=1024)]
-gpoints = [deque(maxlen=1024)]
-rpoints = [deque(maxlen=1024)]
-ypoints = [deque(maxlen=1024)]
-
-# These indexes will be used to mark the points in particular arrays of specific colour
-blue_index = 0
-green_index = 0
-red_index = 0
-yellow_index = 0
-
-#The kernel to be used for dilation purpose 
-kernel = np.ones((5,5),np.uint8)
-
+# Initialize drawing canvas and colors
+bpoints, gpoints, rpoints, ypoints = [deque(maxlen=1024) for _ in range(4)]
+blue_index = green_index = red_index = yellow_index = 0
 colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 255)]
 colorIndex = 0
+canvas_cleared = False  # Flag to track if canvas is cleared
 
-# Here is code for Canvas setup
-paintWindow = np.zeros((471,636,3)) + 255
-paintWindow = cv2.rectangle(paintWindow, (40,1), (140,65), (0,0,0), 2)
-paintWindow = cv2.rectangle(paintWindow, (160,1), (255,65), colors[0], -1)
-paintWindow = cv2.rectangle(paintWindow, (275,1), (370,65), colors[1], -1)
-paintWindow = cv2.rectangle(paintWindow, (390,1), (485,65), colors[2], -1)
-paintWindow = cv2.rectangle(paintWindow, (505,1), (600,65), colors[3], -1)
+# Create drawing canvas
+paintWindow = np.ones((471, 636, 3), dtype=np.uint8) * 255
+buttons = [
+    {"label": "CLEAR", "coords": (40, 1, 140, 65)},
+    {"label": "BLUE", "coords": (160, 1, 255, 65), "color": colors[0]},
+    {"label": "GREEN", "coords": (275, 1, 370, 65), "color": colors[1]},
+    {"label": "RED", "coords": (390, 1, 485, 65), "color": colors[2]},
+    {"label": "YELLOW", "coords": (505, 1, 600, 65), "color": colors[3]},
+]
 
-cv2.putText(paintWindow, "CLEAR", (49, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
-cv2.putText(paintWindow, "BLUE", (185, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-cv2.putText(paintWindow, "GREEN", (298, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-cv2.putText(paintWindow, "RED", (420, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-cv2.putText(paintWindow, "YELLOW", (520, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 2, cv2.LINE_AA)
-cv2.namedWindow('WhiteBoard', cv2.WINDOW_AUTOSIZE)
-
-
-# Loading the default webcam of PC.
+# Initialize webcam
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# Keep looping
+if not cap.isOpened():
+    print("Error: Could not open webcam.")
+    exit()
+
+# Setup MediaPipe Hands
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
+mp_draw = mp.solutions.drawing_utils
+
+def draw_ui(frame):
+    for btn in buttons:
+        x1, y1, x2, y2 = btn["coords"]
+        color = btn.get("color", (122, 122, 122))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+        cv2.putText(
+            frame,
+            btn["label"],
+            (x1 + 10, int((y1 + y2) / 2) + 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255) if "color" in btn else (0, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+def distance(p1, p2):
+    """Compute the Euclidean distance between two points."""
+    return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+print("AirWhiteboard started. Press 'q' to quit.")
+last_log_time = time.time()
+
+drawing = False  # To track whether drawing is enabled or not
+drawing_start_position = None  # Track the position where drawing starts
+
 while True:
-    # Reading the frame from the camera
-    ret, frame = cap.read()
-    #Flipping the frame to see same side of yours
+    success, frame = cap.read()
+    if not success:
+        print("⚠️ Frame capture failed, retrying...")
+        continue
+
     frame = cv2.flip(frame, 1)
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    draw_ui(frame)
 
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = hands.process(frame_rgb)
 
-    u_hue = cv2.getTrackbarPos("Upper Hue", "Color detectors")
-    u_saturation = cv2.getTrackbarPos("Upper Saturation", "Color detectors")
-    u_value = cv2.getTrackbarPos("Upper Value", "Color detectors")
-    l_hue = cv2.getTrackbarPos("Lower Hue", "Color detectors")
-    l_saturation = cv2.getTrackbarPos("Lower Saturation", "Color detectors")
-    l_value = cv2.getTrackbarPos("Lower Value", "Color detectors")
-    Upper_hsv = np.array([u_hue,u_saturation,u_value])
-    Lower_hsv = np.array([l_hue,l_saturation,l_value])
-
-
-    # Adding the colour buttons to the live frame for colour access
-    frame = cv2.rectangle(frame, (40,1), (140,65), (122,122,122), -1)
-    frame = cv2.rectangle(frame, (160,1), (255,65), colors[0], -1)
-    frame = cv2.rectangle(frame, (275,1), (370,65), colors[1], -1)
-    frame = cv2.rectangle(frame, (390,1), (485,65), colors[2], -1)
-    frame = cv2.rectangle(frame, (505,1), (600,65), colors[3], -1)
-    cv2.putText(frame, "CLEAR ALL", (49, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, "BLUE", (185, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, "GREEN", (298, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, "RED", (420, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, "YELLOW", (520, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 2, cv2.LINE_AA)
-
-
-    # Identifying the pointer by making its mask
-    Mask = cv2.inRange(hsv, Lower_hsv, Upper_hsv)
-    Mask = cv2.erode(Mask, kernel, iterations=1)
-    Mask = cv2.morphologyEx(Mask, cv2.MORPH_OPEN, kernel)
-    Mask = cv2.dilate(Mask, kernel, iterations=1)
-
-    # Find contours for the pointer after idetifying it
-    cnts,_ = cv2.findContours(Mask.copy(), cv2.RETR_EXTERNAL,
-    	cv2.CHAIN_APPROX_SIMPLE)
     center = None
 
-    # Ifthe contours are formed
-    if len(cnts) > 0:
-    	# sorting the contours to find biggest 
-        cnt = sorted(cnts, key = cv2.contourArea, reverse = True)[0]
-        # Get the radius of the enclosing circle around the found contour
-        ((x, y), radius) = cv2.minEnclosingCircle(cnt)
-        # Draw the circle around the contour
-        cv2.circle(frame, (int(x), int(y)), int(radius), (0, 255, 255), 2)
-        # Calculating the center of the detected contour
-        M = cv2.moments(cnt)
-        center = (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-        # Now checking if the user wants to click on any button above the screen 
-        if center[1] <= 65:
-            if 40 <= center[0] <= 140: # Clear Button
-                bpoints = [deque(maxlen=512)]
-                gpoints = [deque(maxlen=512)]
-                rpoints = [deque(maxlen=512)]
-                ypoints = [deque(maxlen=512)]
+            x_thumb = int(hand_landmarks.landmark[4].x * frame.shape[1])
+            y_thumb = int(hand_landmarks.landmark[4].y * frame.shape[0])
+            x_index = int(hand_landmarks.landmark[8].x * frame.shape[1])
+            y_index = int(hand_landmarks.landmark[8].y * frame.shape[0])
+            x_middle = int(hand_landmarks.landmark[12].x * frame.shape[1])
+            y_middle = int(hand_landmarks.landmark[12].y * frame.shape[0])
 
-                blue_index = 0
-                green_index = 0
-                red_index = 0
-                yellow_index = 0
+            # Calculate the distance between the thumb and index finger
+            thumb_index_distance = distance((x_thumb, y_thumb), (x_index, y_index))
+            thumb_middle_distance = distance((x_thumb, y_thumb), (x_middle, y_middle))
 
-                paintWindow[67:,:,:] = 255
-            elif 160 <= center[0] <= 255:
-                    colorIndex = 0 # Blue
-            elif 275 <= center[0] <= 370:
-                    colorIndex = 1 # Green
-            elif 390 <= center[0] <= 485:
-                    colorIndex = 2 # Red
-            elif 505 <= center[0] <= 600:
-                    colorIndex = 3 # Yellow
-        else :
-            if colorIndex == 0:
-                bpoints[blue_index].appendleft(center)
-            elif colorIndex == 1:
-                gpoints[green_index].appendleft(center)
-            elif colorIndex == 2:
-                rpoints[red_index].appendleft(center)
-            elif colorIndex == 3:
-                ypoints[yellow_index].appendleft(center)
-    # Append the next deques when nothing is detected to avois messing up
+            # Define a threshold distance to detect pinch
+            pinch_threshold = 50  # You can adjust this value as per your needs
+
+            if thumb_index_distance < pinch_threshold or thumb_middle_distance < pinch_threshold:
+                if not drawing:  # Start drawing if not already drawing
+                    drawing = True
+                    drawing_start_position = (x_index, y_index)  # Save the new start position
+                    print("Drawing started")
+            else:
+                if drawing:  # Stop drawing when the pinch is no longer detected
+                    drawing = False
+                    print("Drawing stopped")
+
+            # Only draw if 'drawing' is True
+            if drawing:
+                center = (x_index, y_index)
+
+                if center:
+                    if y_index <= 65:  # Button area
+                        if 40 <= x_index <= 140:
+                            if not canvas_cleared:  # Only clear if not already cleared
+                                print("Clearing canvas...")
+                                bpoints, gpoints, rpoints, ypoints = [deque(maxlen=1024) for _ in range(4)]
+                                blue_index = green_index = red_index = yellow_index = 0
+                                paintWindow[67:, :, :] = 255
+                                canvas_cleared = True
+                        elif 160 <= x_index <= 255:
+                            colorIndex = 0
+                            canvas_cleared = False
+                        elif 275 <= x_index <= 370:
+                            colorIndex = 1
+                            canvas_cleared = False
+                        elif 390 <= x_index <= 485:
+                            colorIndex = 2
+                            canvas_cleared = False
+                        elif 505 <= x_index <= 600:
+                            colorIndex = 3
+                            canvas_cleared = False
+                    else:
+                        # Reset current color stroke if drawing stops
+                        if colorIndex == 0:
+                            if blue_index >= len(bpoints):
+                                bpoints.append(deque(maxlen=1024))
+                            bpoints[blue_index].append(center)
+                        elif colorIndex == 1:
+                            if green_index >= len(gpoints):
+                                gpoints.append(deque(maxlen=1024))
+                            gpoints[green_index].append(center)
+                        elif colorIndex == 2:
+                            if red_index >= len(rpoints):
+                                rpoints.append(deque(maxlen=1024))
+                            rpoints[red_index].append(center)
+                        elif colorIndex == 3:
+                            if yellow_index >= len(ypoints):
+                                ypoints.append(deque(maxlen=1024))
+                            ypoints[yellow_index].append(center)
     else:
-        bpoints.append(deque(maxlen=512))
-        blue_index += 1
-        gpoints.append(deque(maxlen=512))
-        green_index += 1
-        rpoints.append(deque(maxlen=512))
-        red_index += 1
-        ypoints.append(deque(maxlen=512))
-        yellow_index += 1
+        # Reset drawing when no hand is detected
+        drawing = False
 
-    # Draw lines of all the colors on the canvas and frame 
+    # Draw all strokes
     points = [bpoints, gpoints, rpoints, ypoints]
-    for i in range(len(points)):
+    for i in range(4):
         for j in range(len(points[i])):
             for k in range(1, len(points[i][j])):
                 if points[i][j][k - 1] is None or points[i][j][k] is None:
@@ -161,15 +161,22 @@ while True:
                 cv2.line(frame, points[i][j][k - 1], points[i][j][k], colors[i], 2)
                 cv2.line(paintWindow, points[i][j][k - 1], points[i][j][k], colors[i], 2)
 
-    # Show all the windows
-    cv2.imshow("Tracking", frame)
-    cv2.imshow("Paint", paintWindow)
-    cv2.imshow("mask",Mask)
+    # Show windows
+    cv2.imshow("AirWhiteboard - Camera View", frame)
+    cv2.imshow("Paint Canvas", paintWindow)
 
-	# If the 'q' key is pressed then stop the application 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+    # Log "q" prompt every few seconds only
+    if time.time() - last_log_time > 5:
+        print("Waiting for 'q' to quit...")
+        last_log_time = time.time()
 
-# Release the camera and all resources
+    key = cv2.waitKey(1)
+    if key != -1:
+        key = key & 0xFF
+        if key == ord("q"):
+            print("👋 Exiting AirWhiteboard...")
+            break
+
+# Cleanup
 cap.release()
 cv2.destroyAllWindows()
